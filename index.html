@@ -261,6 +261,13 @@ details.skip div{display:flex;justify-content:space-between;gap:8px;color:var(--
       <label class="primary filebtn">Tria el PDF de l'extracte<input type="file" id="pdfIn" accept="application/pdf,.pdf" hidden></label>
       <p class="hint" id="impMsg"></p>
     </div>
+    <h2>Còpia de seguretat</h2>
+    <div class="card">
+      <p>Guarda totes les teves dades (moviments i el que l'app ha après) en un fitxer, o recupera-les des d'una còpia. Recuperar una còpia no esborra res: només afegeix el que falta.</p>
+      <button class="primary" id="bkOut">Descarrega una còpia</button>
+      <label class="secondary filebtn">Restaura des d'una còpia<input type="file" id="bkIn" accept=".json,application/json" hidden></label>
+      <p class="hint" id="bkMsg"></p>
+    </div>
     <h2>Passar-ho a l'Excel</h2>
     <div class="card">
       <p>L'arxiu té les mateixes columnes que la pestanya Moviments de la teva plantilla (Mes, Descripció, Categoria, Import, Notes), i una pestanya a part amb els ingressos.</p>
@@ -284,8 +291,7 @@ const MONTHS=["Gener","Febrer","Març","Abril","Maig","Juny","Juliol","Agost","S
 const CAT_D=[["Supermercat","🛒"],["Restaurants","🍽️"],["Oci","🎉"],["Roba","👕"],["Transport","🛵"],["Lloguer/Hipoteca","🏠"],["Subscricions","📺"],["Salut","💊"],["Viatges","✈️"],["Esports","🏋️"],["Regals","🎁"],["Altres","📦"]];
 const CAT_I=[["Nòmina","💼"],["Bizum rebut","📲"],["Altres ingressos","💶"]];
 const ICON=Object.fromEntries([...CAT_D,...CAT_I]);
-// Descripcions habituals de la plantilla, per suggerir categoria
-const SEED={"mercadona":"Supermercat","consum":"Supermercat","carrefour":"Supermercat","carrefour express":"Supermercat","paqui":"Supermercat","bazar":"Supermercat","fitness park":"Esports","gasolina moto":"Transport","bolt":"Transport","renfe abonaments":"Transport","abonament ave":"Transport","netflix":"Subscricions","prime":"Subscricions","lloguer pis":"Lloguer/Hipoteca","parking moto":"Lloguer/Hipoteca","lloguer parking moto":"Lloguer/Hipoteca","corral":"Restaurants","forn":"Restaurants","café":"Restaurants","esmorzar":"Restaurants","kebab les corts":"Restaurants","bar manolo":"Restaurants","farmàcia":"Salut","pelu":"Salut","amics":"Oci"};
+const SEED={};
 
 const $=id=>document.getElementById(id);
 const fmt=n=>n.toLocaleString("ca-ES",{minimumFractionDigits:2,maximumFractionDigits:2})+" €";
@@ -578,6 +584,34 @@ function doImport(){
   imp=null;renderAll();toast(n+" importats"+(l?", "+l+" vinculats":""));show("v-dash");
 }
 
+/* ---------- Còpia de seguretat ---------- */
+async function saveFile(name,blob){
+  const dl=window.claude&&claude.use?await claude.use("downloads").catch(()=>null):null;
+  if(dl){await dl.save({filename:name,data:blob});return}
+  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;document.body.append(a);a.click();a.remove();
+}
+async function backupOut(){
+  const body={app:"despeses",v:1,exported:today(),months:state.months,learn:state.learn,learnBank:state.learnBank};
+  try{await saveFile("copia_despeses_"+today()+".json",new Blob([JSON.stringify(body)],{type:"application/json"}));$("bkMsg").textContent="Còpia descarregada. Guarda-la en un lloc privat."}
+  catch(e){if(e&&e.code==="declined")return;$("bkMsg").textContent="No s'ha pogut descarregar la còpia."}
+}
+async function backupIn(e){
+  const f=e.target.files[0];e.target.value="";if(!f)return;const msg=$("bkMsg");
+  try{
+    const b=JSON.parse(await f.text());
+    if(b.app!=="despeses"||!b.months)throw new Error("format");
+    const touched=new Set();let added=0;
+    for(const[k,items]of Object.entries(b.months)){
+      if(!/^m-\d{4}-\d{2}$/.test(k)||!Array.isArray(items))continue;
+      const cur=state.months[k]=state.months[k]||[];const ids=new Set(cur.map(i=>i.id));
+      items.forEach(i=>{if(i&&i.id&&!ids.has(i.id)&&typeof i.amt==="number"){cur.push(i);added++;touched.add(k)}});
+    }
+    state.learn={...(b.learn||{}),...state.learn};state.learnBank={...(b.learnBank||{}),...state.learnBank};touched.add("cfg");
+    persist([...touched]);renderAll();
+    msg.textContent=added?"Fet: s'han recuperat "+added+" moviments.":"La còpia no tenia res que no tinguessis ja.";
+  }catch(err){console.error(err);msg.textContent="Aquest fitxer no és una còpia de l'app de despeses."}
+}
+
 /* ---------- Dashboard ---------- */
 const COL={"Supermercat":"#2E8B62","Restaurants":"#E07A2E","Oci":"#8E4FC2","Roba":"#D6457A","Transport":"#1F4DD8","Lloguer/Hipoteca":"#6B7F7A","Subscricions":"#C9A227","Salut":"#D7263D","Viatges":"#16A3B8","Esports":"#6AA84F","Regals":"#B05B3B","Altres":"#A3AEAA"};
 let dashMode="m", dashCat=null, chDonut=null, chEvo=null;
@@ -693,7 +727,7 @@ $("del").onclick=()=>{try{del()}catch(e){console.error(e);toast("Error en elimin
 $("dPrev").onclick=()=>shiftDash(-1);$("dNext").onclick=()=>shiftDash(1);$("dm-m").onclick=()=>{dashMode="m";dashCat=null;renderDash()};$("dm-a").onclick=()=>{dashMode="a";dashCat=null;renderDash()};
 window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change",()=>{if(chDonut){chDonut.destroy();chDonut=null}if(chEvo){chEvo.destroy();chEvo=null}renderDash()});
 $("prev").onclick=()=>shiftMonth(-1);$("next").onclick=()=>shiftMonth(1);
-$("pdfIn").onchange=onPdf;$("impGo").onclick=doImport;$("impCancel").onclick=()=>{imp=null;show("v-exp")};
+$("pdfIn").onchange=onPdf;$("bkOut").onclick=backupOut;$("bkIn").onchange=backupIn;$("impGo").onclick=doImport;$("impCancel").onclick=()=>{imp=null;show("v-exp")};
 $("expMonth").onclick=()=>exportXlsx(false);$("expAll").onclick=()=>exportXlsx(true);
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{if(b.dataset.v==="v-add"&&editing)resetForm();show(b.dataset.v)});
 document.addEventListener("keydown",e=>{if(e.key==="Enter"&&$("v-add").classList.contains("on")&&e.target.tagName==="INPUT"){e.preventDefault();save()}});
